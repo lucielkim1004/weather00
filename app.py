@@ -782,20 +782,47 @@ def display_weather(weather_data, show_current_location: bool = False):
         # 바람
         wind_speed = weather_data['wind']['speed']
         
-        # 시간 정보
-        timezone = weather_data['timezone']
-        sunrise = datetime.fromtimestamp(weather_data['sys']['sunrise'] + timezone)
-        sunset = datetime.fromtimestamp(weather_data['sys']['sunset'] + timezone)
+        # 시간 정보 (검색된 도시의 타임존 기준)
+        timezone_offset = weather_data['timezone']  # UTC로부터의 초 단위 오프셋
         
-        # 현재 날짜와 시간
-        current_time = datetime.now()
+        # UTC 시간 기준으로 현재 시각 계산
+        from datetime import timezone as tz, timedelta
+        utc_now = datetime.now(tz.utc)
+        local_time = utc_now + timedelta(seconds=timezone_offset)
+        
+        # 일출/일몰 시간 (검색된 도시 기준)
+        sunrise_utc = datetime.fromtimestamp(weather_data['sys']['sunrise'], tz.utc)
+        sunset_utc = datetime.fromtimestamp(weather_data['sys']['sunset'], tz.utc)
+        sunrise = sunrise_utc + timedelta(seconds=timezone_offset)
+        sunset = sunset_utc + timedelta(seconds=timezone_offset)
+        
+        # 요일 한글 변환
+        weekday_kr = {
+            'Monday': '월요일',
+            'Tuesday': '화요일', 
+            'Wednesday': '수요일',
+            'Thursday': '목요일',
+            'Friday': '금요일',
+            'Saturday': '토요일',
+            'Sunday': '일요일'
+        }
+        weekday_eng = local_time.strftime('%A')
+        weekday_display = weekday_kr.get(weekday_eng, weekday_eng)
+        
+        # 타임존 표시 (UTC 오프셋)
+        tz_hours = timezone_offset // 3600
+        tz_minutes = abs(timezone_offset % 3600) // 60
+        if tz_minutes == 0:
+            tz_display = f"UTC{tz_hours:+d}"
+        else:
+            tz_display = f"UTC{tz_hours:+d}:{tz_minutes:02d}"
         
         # 화면 표시 - 헤더
         st.markdown(f"""
         <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 20px;'>
             <h1 style='color: white; margin: 0;'>🌤️ {city_name}, {country}</h1>
             <p style='color: #f0f0f0; font-size: 16px; margin: 10px 0 0 0;'>
-                📅 {current_time.strftime('%Y년 %m월 %d일 %A')} | 🕐 {current_time.strftime('%H:%M:%S')}
+                📅 {local_time.strftime('%Y년 %m월 %d일')} {weekday_display} | 🕐 {local_time.strftime('%H:%M:%S')} ({tz_display})
             </p>
         </div>
         """, unsafe_allow_html=True)
