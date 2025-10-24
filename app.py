@@ -12,11 +12,9 @@ load_dotenv()
 try:
     # Streamlit Cloud 배포 시 st.secrets 사용
     API_KEY = st.secrets.get("OPENWEATHER_API_KEY")
-    KAKAO_JS_KEY = st.secrets.get("KAKAO_JS_KEY")
 except (FileNotFoundError, AttributeError):
     # 로컬 개발 시 .env 파일 사용
     API_KEY = os.getenv("OPENWEATHER_API_KEY")
-    KAKAO_JS_KEY = os.getenv("KAKAO_JS_KEY")
 
 # OpenWeather API 설정
 BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
@@ -24,15 +22,14 @@ FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
 
 # API 키 검증
-if not API_KEY or not KAKAO_JS_KEY:
-    st.error("⚠️ API 키가 설정되지 않았습니다.")
+if not API_KEY:
+    st.error("⚠️ OpenWeather API 키가 설정되지 않았습니다.")
     st.info("💡 **로컬 개발**: .env 파일을 생성하고 API 키를 입력하세요.")
     st.info("💡 **Streamlit Cloud**: Settings > Secrets에서 API 키를 설정하세요.")
     st.code("""
-# Streamlit Cloud Secrets 설정 예시 (TOML 형식)
-OPENWEATHER_API_KEY = "your_api_key_here"
-KAKAO_JS_KEY = "your_kakao_key_here"
-    """, language="toml")
+# .env 파일 또는 Streamlit Cloud Secrets 설정
+OPENWEATHER_API_KEY = "your_openweather_api_key_here"
+    """, language="bash")
     st.stop()
 
 
@@ -282,76 +279,93 @@ def get_historical_weather(lat, lon, days_ago):
 
 
 def render_kakao_map(lat: float, lon: float, city_name: str, show_current_location: bool = False):
-    """Kakao 지도 컴포넌트를 렌더링합니다."""
+    """Leaflet 지도 컴포넌트를 렌더링합니다 (HTTPS 완전 지원)."""
     html_code = f"""
     <!DOCTYPE html>
     <html>
       <head>
         <meta charset='utf-8'/>
         <meta name='viewport' content='width=device-width, initial-scale=1'/>
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
         <style>
-          #map {{ width: 100%; height: 420px; border-radius: 12px; }}
-          .label {{ padding:6px 8px; font-size:13px; color:#222; }}
-          .error {{ font-family: system-ui,-apple-system,Segoe UI,Roboto; color:#b00020; background:#fdecea; padding:12px; border-radius:8px; }}
+          #map {{ width: 100%; height: 420px; border-radius: 12px; z-index: 0; }}
+          .custom-popup {{
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            font-weight: bold;
+          }}
+          .leaflet-popup-content-wrapper {{
+            border-radius: 8px;
+          }}
         </style>
-        <script src='https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&libraries=services,clusterer&autoload=false'></script>
       </head>
       <body>
         <div id='map'></div>
         <script>
-          function showError(msg) {{
-            var container = document.getElementById('map');
-            container.innerHTML = '<div class="error">' + msg + '</div>';
-          }}
-
-          if (!window.kakao) {{
-            showError('Kakao Maps SDK를 불러오지 못했습니다. 네트워크 또는 도메인 허용 설정을 확인하세요.');
-          }} else {{
-            kakao.maps.load(function () {{
-              var center = new kakao.maps.LatLng({lat}, {lon});
-              var container = document.getElementById('map');
-              var options = {{ center: center, level: 5 }};
-              var map = new kakao.maps.Map(container, options);
-
-              var marker = new kakao.maps.Marker({{ position: center }});
-              marker.setMap(map);
-
-              var iw = new kakao.maps.InfoWindow({{ content: '<div class="label">📍 {city_name}</div>' }});
-              iw.open(map, marker);
-
-              var showCurrent = {str(show_current_location).lower()};
-              if (showCurrent && navigator.geolocation) {{
-                navigator.geolocation.getCurrentPosition(function(pos) {{
-                  var myLat = pos.coords.latitude;
-                  var myLon = pos.coords.longitude;
-                  var myPos = new kakao.maps.LatLng(myLat, myLon);
-
-                  var myMarkerImg = new kakao.maps.MarkerImage(
-                    'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/markerStar.png',
-                    new kakao.maps.Size(24, 35)
-                  );
-                  var myMarker = new kakao.maps.Marker({{ position: myPos, image: myMarkerImg }});
-                  myMarker.setMap(map);
-
-                  var path = [center, myPos];
-                  var polyline = new kakao.maps.Polyline({{
-                    path: path,
-                    strokeWeight: 3,
-                    strokeColor: '#0A84FF',
-                    strokeOpacity: 0.7,
-                    strokeStyle: 'shortdash'
-                  }});
-                  polyline.setMap(map);
-
-                  var bounds = new kakao.maps.LatLngBounds();
-                  bounds.extend(center);
-                  bounds.extend(myPos);
-                  map.setBounds(bounds);
-                }}, function(err) {{
-                  console.warn('Geolocation error:', err);
+          try {{
+            // 지도 초기화
+            var map = L.map('map').setView([{lat}, {lon}], 13);
+            
+            // OpenStreetMap 타일 레이어 (HTTPS)
+            L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+              maxZoom: 19
+            }}).addTo(map);
+            
+            // 목표 위치 마커 (파란색 기본 마커)
+            var targetMarker = L.marker([{lat}, {lon}]).addTo(map);
+            targetMarker.bindPopup('<div class="custom-popup">📍 {city_name}</div>').openPopup();
+            
+            // 현재 위치 표시 옵션
+            var showCurrent = {str(show_current_location).lower()};
+            if (showCurrent && navigator.geolocation) {{
+              navigator.geolocation.getCurrentPosition(function(pos) {{
+                var myLat = pos.coords.latitude;
+                var myLon = pos.coords.longitude;
+                
+                // 현재 위치 마커 (빨간색 커스텀 아이콘)
+                var redIcon = L.icon({{
+                  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+                  iconSize: [25, 41],
+                  iconAnchor: [12, 41],
+                  popupAnchor: [1, -34],
+                  shadowSize: [41, 41]
                 }});
-              }}
-            }});
+                
+                var currentMarker = L.marker([myLat, myLon], {{icon: redIcon}}).addTo(map);
+                currentMarker.bindPopup('<div class="custom-popup">🔴 내 위치</div>');
+                
+                // 두 지점을 잇는 선
+                var latlngs = [
+                  [{lat}, {lon}],
+                  [myLat, myLon]
+                ];
+                var polyline = L.polyline(latlngs, {{
+                  color: '#0A84FF',
+                  weight: 3,
+                  opacity: 0.7,
+                  dashArray: '10, 10'
+                }}).addTo(map);
+                
+                // 두 마커가 모두 보이도록 지도 범위 조정
+                var bounds = L.latLngBounds([
+                  [{lat}, {lon}],
+                  [myLat, myLon]
+                ]);
+                map.fitBounds(bounds, {{padding: [50, 50]}});
+              }}, function(err) {{
+                console.warn('Geolocation error:', err);
+              }});
+            }}
+          }} catch (e) {{
+            document.getElementById('map').innerHTML = 
+              '<div style="padding:20px;color:#b00020;background:#fdecea;border-radius:8px;">지도 로딩 오류: ' + e.message + '</div>';
           }}
         </script>
       </body>
@@ -1005,26 +1019,27 @@ def display_weather(weather_data, show_current_location: bool = False):
                 render_kakao_map(lat, lon, city_name, show_current_location)
                 
                 # 지도 도움말
-                with st.expander("💡 지도가 보이지 않나요?"):
+                with st.expander("💡 지도 정보"):
                     st.markdown("""
-                    **Kakao Maps 표시 문제 해결:**
+                    **Leaflet & OpenStreetMap 지도**
                     
-                    1. **도메인 허용 설정** (필수)
-                       - [Kakao Developers 콘솔](https://developers.kakao.com) 로그인
-                       - 내 애플리케이션 > 앱 설정 > 플랫폼
-                       - 웹 플랫폼 추가 후 `http://localhost:8501` 또는 `http://localhost:8502` 등록
+                    ✅ **특징:**
+                    - 완전 무료 오픈소스 지도 서비스
+                    - HTTPS 완전 지원 (Streamlit Cloud 배포 시 안전)
+                    - 전세계 모든 지역 지원
+                    - 별도 API 키 불필요
                     
-                    2. **네트워크 확인**
-                       - 방화벽이나 AdBlock이 `dapi.kakao.com` 차단하는지 확인
-                       - 회사망/VPN 사용 시 외부 스크립트 로딩 제한 확인
+                    🗺️ **지도 사용법:**
+                    - 마우스 드래그: 지도 이동
+                    - 마우스 휠: 확대/축소
+                    - 마커 클릭: 위치 정보 표시
+                    - 📍 파란색 마커: 검색한 위치
+                    - 🔴 빨간색 마커: 내 현재 위치 (권한 허용 시)
                     
-                    3. **브라우저 콘솔 확인**
-                       - F12 개발자 도구 > Console 탭에서 에러 메시지 확인
-                       - Kakao SDK 로딩 실패 메시지가 있는지 확인
-                    
-                    4. **현재 위치 표시 기능**
-                       - HTTPS 또는 localhost에서만 브라우저 위치 정보 사용 가능
-                       - 브라우저 설정에서 위치 정보 권한 허용 필요
+                    🌐 **현재 위치 표시 기능:**
+                    - HTTPS 또는 localhost에서만 작동
+                    - 브라우저 설정에서 위치 정보 권한 허용 필요
+                    - 점선은 검색 위치와 내 위치 사이의 거리
                     """)
             except Exception as e:
                 st.error(f"❌ 지도를 표시하는 중 오류가 발생했습니다: {str(e)}")
