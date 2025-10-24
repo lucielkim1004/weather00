@@ -5,24 +5,168 @@ import streamlit.components.v1 as components
 import os
 from dotenv import load_dotenv
 
-# 환경 변수 로드
+# 환경 변수 로드 (로컬 개발용)
 load_dotenv()
 
+# API 키 로드: Streamlit Secrets 우선, 없으면 환경 변수 사용
+try:
+    # Streamlit Cloud 배포 시 st.secrets 사용
+    API_KEY = st.secrets.get("OPENWEATHER_API_KEY")
+    KAKAO_JS_KEY = st.secrets.get("KAKAO_JS_KEY")
+except (FileNotFoundError, AttributeError):
+    # 로컬 개발 시 .env 파일 사용
+    API_KEY = os.getenv("OPENWEATHER_API_KEY")
+    KAKAO_JS_KEY = os.getenv("KAKAO_JS_KEY")
+
 # OpenWeather API 설정
-API_KEY = os.getenv("OPENWEATHER_API_KEY")
 BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
 FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
 
-# Kakao Maps API 설정 (JavaScript 키)
-# 도메인 허용: http://localhost:8501 를 Kakao Developers 콘솔에 추가해야 합니다.
-KAKAO_JS_KEY = os.getenv("KAKAO_JS_KEY")
-
 # API 키 검증
 if not API_KEY or not KAKAO_JS_KEY:
-    st.error("⚠️ API 키가 설정되지 않았습니다. .env 파일을 확인해주세요.")
-    st.info("💡 .env.example 파일을 참고하여 .env 파일을 생성하고 API 키를 입력하세요.")
+    st.error("⚠️ API 키가 설정되지 않았습니다.")
+    st.info("💡 **로컬 개발**: .env 파일을 생성하고 API 키를 입력하세요.")
+    st.info("💡 **Streamlit Cloud**: Settings > Secrets에서 API 키를 설정하세요.")
+    st.code("""
+# Streamlit Cloud Secrets 설정 예시 (TOML 형식)
+OPENWEATHER_API_KEY = "your_api_key_here"
+KAKAO_JS_KEY = "your_kakao_key_here"
+    """, language="toml")
     st.stop()
+
+
+def get_location_by_gps():
+    """HTML5 Geolocation API를 사용하여 휴대폰/브라우저의 GPS 위치를 가져옵니다."""
+    
+    # JavaScript 코드로 GPS 위치 획득
+    gps_html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset='utf-8'/>
+        <style>
+            body { font-family: system-ui, -apple-system, sans-serif; padding: 20px; }
+            .status { padding: 15px; border-radius: 8px; margin: 10px 0; }
+            .loading { background: #e3f2fd; color: #1976d2; }
+            .success { background: #e8f5e9; color: #2e7d32; }
+            .error { background: #ffebee; color: #c62828; }
+            .btn { 
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 12px 24px;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            .btn:hover { opacity: 0.9; }
+            .coordinates { 
+                background: #f5f5f5; 
+                padding: 15px; 
+                border-radius: 8px; 
+                margin: 10px 0;
+                font-family: monospace;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="status"></div>
+        <div id="result"></div>
+        
+        <script>
+            const status = document.getElementById('status');
+            const result = document.getElementById('result');
+            
+            function showStatus(message, type) {
+                status.className = 'status ' + type;
+                status.innerHTML = message;
+            }
+            
+            function getLocation() {
+                if (!navigator.geolocation) {
+                    showStatus('❌ 이 브라우저는 GPS 위치 정보를 지원하지 않습니다.', 'error');
+                    return;
+                }
+                
+                showStatus('📡 GPS 위치를 확인하는 중... 권한을 허용해주세요.', 'loading');
+                
+                const options = {
+                    enableHighAccuracy: true,  // GPS 사용 (배터리 소모 증가)
+                    timeout: 10000,            // 10초 타임아웃
+                    maximumAge: 0              // 캐시 사용 안 함
+                };
+                
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+                        const accuracy = position.coords.accuracy;
+                        
+                        showStatus('✅ GPS 위치를 성공적으로 가져왔습니다!', 'success');
+                        
+                        result.innerHTML = `
+                            <div class="coordinates">
+                                <h3 style="margin-top:0;">📍 GPS 좌표</h3>
+                                <p><strong>위도:</strong> ${lat.toFixed(6)}</p>
+                                <p><strong>경도:</strong> ${lon.toFixed(6)}</p>
+                                <p><strong>정확도:</strong> ±${accuracy.toFixed(0)}m</p>
+                                <p style="font-size:12px; color:#666; margin-top:10px;">
+                                    💡 위 좌표를 복사하여 Streamlit 앱에서 사용하세요.
+                                </p>
+                            </div>
+                        `;
+                        
+                        // Streamlit으로 데이터 전달 (parent window)
+                        window.parent.postMessage({
+                            type: 'gps_location',
+                            lat: lat,
+                            lon: lon,
+                            accuracy: accuracy
+                        }, '*');
+                    },
+                    function(error) {
+                        let errorMsg = '';
+                        switch(error.code) {
+                            case error.PERMISSION_DENIED:
+                                errorMsg = '❌ 위치 정보 권한이 거부되었습니다. 브라우저 설정에서 위치 권한을 허용해주세요.';
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                errorMsg = '❌ 위치 정보를 사용할 수 없습니다. GPS가 꺼져있거나 실내에 있을 수 있습니다.';
+                                break;
+                            case error.TIMEOUT:
+                                errorMsg = '❌ 위치 정보 요청 시간이 초과되었습니다. 다시 시도해주세요.';
+                                break;
+                            default:
+                                errorMsg = '❌ 알 수 없는 오류가 발생했습니다.';
+                        }
+                        showStatus(errorMsg, 'error');
+                        
+                        result.innerHTML = `
+                            <div style="padding:15px; background:#fff3cd; border-radius:8px; margin-top:10px;">
+                                <h4 style="margin-top:0;">💡 문제 해결 방법</h4>
+                                <ul style="margin:10px 0;">
+                                    <li>브라우저 주소창의 위치 아이콘을 클릭하여 권한 허용</li>
+                                    <li>HTTPS 또는 localhost에서만 GPS 사용 가능</li>
+                                    <li>실외에서 시도하면 GPS 정확도가 향상됩니다</li>
+                                    <li>Wi-Fi나 모바일 데이터가 켜져있는지 확인</li>
+                                </ul>
+                            </div>
+                        `;
+                    },
+                    options
+                );
+            }
+            
+            // 자동으로 위치 정보 요청
+            getLocation();
+        </script>
+    </body>
+    </html>
+    """
+    
+    components.html(gps_html, height=300)
 
 
 def get_location_by_ip():
@@ -893,13 +1037,46 @@ def main():
         layout="wide"
     )
     
+    # 세션 스테이트 초기화 (선택된 위치 방식 추적)
+    if 'location_method' not in st.session_state:
+        st.session_state.location_method = None
+    
     # 사이드바
     st.sidebar.title("🌍 날씨 검색")
     st.sidebar.write("전세계 도시의 실시간 날씨를 확인하세요!")
     
     # 현재 위치 날씨 버튼
     st.sidebar.markdown("### 📍 현재 위치")
-    current_location_button = st.sidebar.button("📍 현재 위치 날씨 보기", type="secondary", use_container_width=True)
+    
+    # GPS와 IP 위치 버튼을 2개 열로 배치
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        # GPS 버튼 - 선택되면 primary 스타일
+        gps_button_type = "primary" if st.session_state.location_method == "GPS" else "secondary"
+        gps_location_button = st.button(
+            "🛰️ GPS" if st.session_state.location_method != "GPS" else "✅ GPS", 
+            type=gps_button_type, 
+            use_container_width=True, 
+            help="휴대폰 GPS로 정확한 위치 확인",
+            key="gps_btn"
+        )
+    with col2:
+        # IP 버튼 - 선택되면 primary 스타일
+        ip_button_type = "primary" if st.session_state.location_method == "IP" else "secondary"
+        ip_location_button = st.button(
+            "🌐 IP" if st.session_state.location_method != "IP" else "✅ IP", 
+            type=ip_button_type, 
+            use_container_width=True, 
+            help="IP 주소로 대략적인 위치 확인",
+            key="ip_btn"
+        )
+    
+    # 현재 선택된 방식 표시
+    if st.session_state.location_method:
+        if st.session_state.location_method == "GPS":
+            st.sidebar.info("🛰️ **GPS 모드** 활성화")
+        elif st.session_state.location_method == "IP":
+            st.sidebar.info("🌐 **IP 모드** 활성화")
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔍 도시 검색")
@@ -916,8 +1093,61 @@ def main():
     # 지도 옵션
     show_current_location = st.sidebar.checkbox("지도에 현재 위치도 표시", value=False)
     
-    # 현재 위치 버튼을 누른 경우
-    if current_location_button:
+    # 버튼 클릭 처리
+    if gps_location_button:
+        st.session_state.location_method = "GPS"
+        st.rerun()
+    
+    if ip_location_button:
+        st.session_state.location_method = "IP"
+        st.rerun()
+    
+    # 도시 검색 시 위치 방식 초기화
+    if search_button or city:
+        st.session_state.location_method = None
+    
+    # GPS 모드 실행
+    if st.session_state.location_method == "GPS":
+        st.title("🛰️ GPS 위치 확인")
+        st.info("📱 **휴대폰 GPS를 사용하여 정확한 위치를 확인합니다**")
+        st.markdown("""
+        - ✅ GPS 사용으로 **가장 정확한 위치** 제공 (±10m 이내)
+        - ⚠️ 브라우저에서 **위치 권한 허용** 필요
+        - 🌐 HTTPS 또는 localhost에서만 작동
+        - 📡 실외에서 더 정확한 결과
+        """)
+        
+        st.markdown("---")
+        
+        # GPS 위치 획득 컴포넌트
+        get_location_by_gps()
+        
+        st.markdown("---")
+        
+        # 수동 입력 옵션
+        with st.expander("📝 GPS 좌표를 직접 입력하기"):
+            st.info("위의 GPS 좌표를 복사하여 아래에 입력하거나, 직접 위도/경도를 입력하세요.")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                manual_lat = st.number_input("위도 (Latitude)", min_value=-90.0, max_value=90.0, value=37.5665, step=0.0001, format="%.6f")
+            with col2:
+                manual_lon = st.number_input("경도 (Longitude)", min_value=-180.0, max_value=180.0, value=126.9780, step=0.0001, format="%.6f")
+            
+            if st.button("🌤️ 이 좌표의 날씨 보기", type="primary"):
+                with st.spinner('🌤️ 날씨 정보를 가져오는 중...'):
+                    weather_data = get_weather_by_coords(manual_lat, manual_lon)
+                    
+                    if weather_data and str(weather_data.get('cod')) != '404':
+                        city_name = weather_data.get('name', 'Unknown')
+                        st.success(f"✅ GPS 좌표 ({manual_lat:.4f}, {manual_lon:.4f})의 날씨 정보를 불러왔습니다!")
+                        display_weather(weather_data, show_current_location=False)
+                    else:
+                        st.error("❌ 해당 좌표의 날씨 정보를 가져올 수 없습니다.")
+                        st.warning("💡 좌표가 정확한지 확인해주세요.")
+    
+    # IP 모드 실행
+    elif st.session_state.location_method == "IP":
         with st.spinner('📡 현재 위치를 확인하는 중... (IP 주소 기반)'):
             location_info = get_location_by_ip()
             
@@ -952,19 +1182,62 @@ def main():
                 - 방화벽이 외부 API 요청을 차단
                 """)
                 st.info("💡 **대안:** 아래에서 도시 이름을 직접 입력하여 검색해보세요.")
-        return
     
-    # 메인 화면
-    if not city and not search_button:
+    # 메인 화면 또는 도시 검색
+    elif not city and not search_button:
         st.title("🌤️ 날씨 웹앱에 오신 것을 환영합니다!")
         st.write("왼쪽 사이드바에서 도시를 입력하거나 현재 위치를 사용하여 날씨를 확인하세요.")
         
         # 안내 메시지
         st.info("💡 **사용 방법:**")
         st.markdown("""
-        1. **📍 현재 위치:** 사이드바의 '현재 위치 날씨 보기' 버튼을 클릭하면 IP 주소를 기반으로 자동으로 위치를 감지합니다.
-        2. **🔍 도시 검색:** 한글 또는 영문으로 도시 이름을 입력하고 검색 버튼을 클릭하세요.
+        1. **�️ GPS 위치:** 사이드바의 'GPS' 버튼을 클릭하면 휴대폰 GPS로 정확한 위치를 감지합니다 (권한 허용 필요).
+        2. **🌐 IP 위치:** 사이드바의 'IP' 버튼을 클릭하면 IP 주소를 기반으로 대략적인 위치를 감지합니다.
+        3. **🔍 도시 검색:** 한글 또는 영문으로 도시 이름을 입력하고 검색 버튼을 클릭하세요.
         """)
+        
+        # 위치 확인 방법 비교
+        st.markdown("### 📍 위치 확인 방법 비교")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            <div style='padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
+                <h3 style='margin-top: 0;'>🛰️ GPS 위치</h3>
+                <p><strong>✅ 장점:</strong></p>
+                <ul>
+                    <li>가장 정확한 위치 (±10m 이내)</li>
+                    <li>실시간 GPS 사용</li>
+                    <li>실외에서 매우 정확</li>
+                </ul>
+                <p><strong>⚠️ 단점:</strong></p>
+                <ul>
+                    <li>브라우저 권한 허용 필요</li>
+                    <li>실내에서 정확도 낮음</li>
+                    <li>배터리 소모 약간 증가</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+            <div style='padding: 20px; background: linear-gradient(135deg, #48c6ef 0%, #6f86d6 100%); border-radius: 10px; color: white;'>
+                <h3 style='margin-top: 0;'>🌐 IP 위치</h3>
+                <p><strong>✅ 장점:</strong></p>
+                <ul>
+                    <li>빠르고 간편</li>
+                    <li>권한 불필요</li>
+                    <li>어디서나 작동</li>
+                </ul>
+                <p><strong>⚠️ 단점:</strong></p>
+                <ul>
+                    <li>정확도 낮음 (±5km 이상)</li>
+                    <li>도시 단위 위치</li>
+                    <li>VPN 사용 시 부정확</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        
         st.success("✅ 한국 도시는 시/군/구 단위까지 한글로 입력 가능합니다")
         
         # 검색 가능한 지역 안내
@@ -989,7 +1262,8 @@ def main():
                 st.write("청주, 천안, 창원")
         
         st.success("✅ 전세계 모든 도시 검색 가능합니다 (예: Tokyo, London, Paris, New York)")
-        
+    
+    # 도시 검색 실행
     elif city:
         # 입력된 도시명 표시 (한글인 경우)
         display_city = city
