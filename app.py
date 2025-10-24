@@ -1,0 +1,1016 @@
+import streamlit as st
+import requests
+from datetime import datetime
+import streamlit.components.v1 as components
+import os
+from dotenv import load_dotenv
+
+# 환경 변수 로드
+load_dotenv()
+
+# OpenWeather API 설정
+API_KEY = os.getenv("OPENWEATHER_API_KEY")
+BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
+FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
+ONECALL_URL = "https://api.openweathermap.org/data/3.0/onecall"
+
+# Kakao Maps API 설정 (JavaScript 키)
+# 도메인 허용: http://localhost:8501 를 Kakao Developers 콘솔에 추가해야 합니다.
+KAKAO_JS_KEY = os.getenv("KAKAO_JS_KEY")
+
+# API 키 검증
+if not API_KEY or not KAKAO_JS_KEY:
+    st.error("⚠️ API 키가 설정되지 않았습니다. .env 파일을 확인해주세요.")
+    st.info("💡 .env.example 파일을 참고하여 .env 파일을 생성하고 API 키를 입력하세요.")
+    st.stop()
+
+
+def get_location_by_ip():
+    """IP 주소를 기반으로 현재 위치(위도, 경도)를 가져옵니다.
+    여러 무료 IP 위치 서비스를 시도하여 가장 정확한 위치를 반환합니다."""
+    
+    # 방법 1: ipapi.co (가장 정확하지만 요청 제한 있음)
+    try:
+        response = requests.get('https://ipapi.co/json/', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            
+            lat = data.get('latitude')
+            lon = data.get('longitude')
+            city = data.get('city', 'Unknown')
+            country = data.get('country_name', 'Unknown')
+            
+            if lat and lon:
+                return {
+                    'lat': lat,
+                    'lon': lon,
+                    'city': city,
+                    'country': country,
+                    'ip': data.get('ip', 'Unknown'),
+                    'source': 'ipapi.co'
+                }
+    except Exception:
+        pass
+    
+    # 방법 2: ip-api.com (무료, 요청 제한 느슨)
+    try:
+        response = requests.get('http://ip-api.com/json/?fields=status,message,country,city,lat,lon,query', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data.get('status') == 'success':
+                return {
+                    'lat': data.get('lat'),
+                    'lon': data.get('lon'),
+                    'city': data.get('city', 'Unknown'),
+                    'country': data.get('country', 'Unknown'),
+                    'ip': data.get('query', 'Unknown'),
+                    'source': 'ip-api.com'
+                }
+    except Exception:
+        pass
+    
+    # 방법 3: ipinfo.io (무료 티어)
+    try:
+        response = requests.get('https://ipinfo.io/json', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            
+            loc = data.get('loc', '').split(',')
+            if len(loc) == 2:
+                return {
+                    'lat': float(loc[0]),
+                    'lon': float(loc[1]),
+                    'city': data.get('city', 'Unknown'),
+                    'country': data.get('country', 'Unknown'),
+                    'ip': data.get('ip', 'Unknown'),
+                    'source': 'ipinfo.io'
+                }
+    except Exception:
+        pass
+    
+    return None
+
+
+def get_weather_by_coords(lat, lon):
+    """위도와 경도로 날씨 정보를 가져옵니다."""
+    params = {
+        'lat': lat,
+        'lon': lon,
+        'appid': API_KEY,
+        'units': 'metric',
+        'lang': 'kr'
+    }
+    
+    try:
+        response = requests.get(BASE_URL, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException:
+        return None
+
+
+def get_forecast_data(lat, lon):
+    """위도와 경도로 5일간의 날씨 예보를 가져옵니다 (3시간 간격)."""
+    params = {
+        'lat': lat,
+        'lon': lon,
+        'appid': API_KEY,
+        'units': 'metric',
+        'lang': 'kr',
+        'cnt': 40  # 5일 * 8회 (3시간 간격)
+    }
+    
+    try:
+        response = requests.get(FORECAST_URL, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException:
+        return None
+
+
+def get_historical_weather(lat, lon, days_ago):
+    """특정 날짜의 과거 날씨 데이터를 가져옵니다.
+    OpenWeather의 무료 API는 과거 데이터를 제공하지 않으므로,
+    대신 5일 예보 데이터를 사용하여 최근 경향을 표시합니다."""
+    # 무료 API 제한으로 인해 실제 과거 데이터 대신 예보 데이터 사용
+    return None
+
+
+def render_kakao_map(lat: float, lon: float, city_name: str, show_current_location: bool = False):
+    """Kakao 지도 컴포넌트를 렌더링합니다."""
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset='utf-8'/>
+        <meta name='viewport' content='width=device-width, initial-scale=1'/>
+        <style>
+          #map {{ width: 100%; height: 420px; border-radius: 12px; }}
+          .label {{ padding:6px 8px; font-size:13px; color:#222; }}
+          .error {{ font-family: system-ui,-apple-system,Segoe UI,Roboto; color:#b00020; background:#fdecea; padding:12px; border-radius:8px; }}
+        </style>
+        <script src='https://dapi.kakao.com/v2/maps/sdk.js?appkey={KAKAO_JS_KEY}&libraries=services,clusterer&autoload=false'></script>
+      </head>
+      <body>
+        <div id='map'></div>
+        <script>
+          function showError(msg) {{
+            var container = document.getElementById('map');
+            container.innerHTML = '<div class="error">' + msg + '</div>';
+          }}
+
+          if (!window.kakao) {{
+            showError('Kakao Maps SDK를 불러오지 못했습니다. 네트워크 또는 도메인 허용 설정을 확인하세요.');
+          }} else {{
+            kakao.maps.load(function () {{
+              var center = new kakao.maps.LatLng({lat}, {lon});
+              var container = document.getElementById('map');
+              var options = {{ center: center, level: 5 }};
+              var map = new kakao.maps.Map(container, options);
+
+              var marker = new kakao.maps.Marker({{ position: center }});
+              marker.setMap(map);
+
+              var iw = new kakao.maps.InfoWindow({{ content: '<div class="label">📍 {city_name}</div>' }});
+              iw.open(map, marker);
+
+              var showCurrent = {str(show_current_location).lower()};
+              if (showCurrent && navigator.geolocation) {{
+                navigator.geolocation.getCurrentPosition(function(pos) {{
+                  var myLat = pos.coords.latitude;
+                  var myLon = pos.coords.longitude;
+                  var myPos = new kakao.maps.LatLng(myLat, myLon);
+
+                  var myMarkerImg = new kakao.maps.MarkerImage(
+                    'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/markerStar.png',
+                    new kakao.maps.Size(24, 35)
+                  );
+                  var myMarker = new kakao.maps.Marker({{ position: myPos, image: myMarkerImg }});
+                  myMarker.setMap(map);
+
+                  var path = [center, myPos];
+                  var polyline = new kakao.maps.Polyline({{
+                    path: path,
+                    strokeWeight: 3,
+                    strokeColor: '#0A84FF',
+                    strokeOpacity: 0.7,
+                    strokeStyle: 'shortdash'
+                  }});
+                  polyline.setMap(map);
+
+                  var bounds = new kakao.maps.LatLngBounds();
+                  bounds.extend(center);
+                  bounds.extend(myPos);
+                  map.setBounds(bounds);
+                }}, function(err) {{
+                  console.warn('Geolocation error:', err);
+                }});
+              }}
+            }});
+          }}
+        </script>
+      </body>
+    </html>
+    """
+    
+    components.html(html_code, height=450)
+
+
+# 한글-영문 도시 매핑
+KOREAN_CITIES = {
+    # 서울특별시
+    "서울": "Seoul",
+    "서울특별시": "Seoul",
+    "강남": "Gangnam-gu,Seoul,KR",
+    "강남구": "Gangnam-gu,Seoul,KR",
+    "강동": "Gangdong-gu,Seoul,KR",
+    "강동구": "Gangdong-gu,Seoul,KR",
+    "강북": "Gangbuk-gu,Seoul,KR",
+    "강북구": "Gangbuk-gu,Seoul,KR",
+    "강서": "Gangseo-gu,Seoul,KR",
+    "강서구": "Gangseo-gu,Seoul,KR",
+    "관악": "Gwanak-gu,Seoul,KR",
+    "관악구": "Gwanak-gu,Seoul,KR",
+    "광진": "Gwangjin-gu,Seoul,KR",
+    "광진구": "Gwangjin-gu,Seoul,KR",
+    "구로": "Guro-gu,Seoul,KR",
+    "구로구": "Guro-gu,Seoul,KR",
+    "금천": "Geumcheon-gu,Seoul,KR",
+    "금천구": "Geumcheon-gu,Seoul,KR",
+    "노원": "Nowon-gu,Seoul,KR",
+    "노원구": "Nowon-gu,Seoul,KR",
+    "도봉": "Dobong-gu,Seoul,KR",
+    "도봉구": "Dobong-gu,Seoul,KR",
+    "동대문": "Dongdaemun-gu,Seoul,KR",
+    "동대문구": "Dongdaemun-gu,Seoul,KR",
+    "동작": "Dongjak-gu,Seoul,KR",
+    "동작구": "Dongjak-gu,Seoul,KR",
+    "마포": "Mapo-gu,Seoul,KR",
+    "마포구": "Mapo-gu,Seoul,KR",
+    "서대문": "Seodaemun-gu,Seoul,KR",
+    "서대문구": "Seodaemun-gu,Seoul,KR",
+    "서초": "Seocho-gu,Seoul,KR",
+    "서초구": "Seocho-gu,Seoul,KR",
+    "성동": "Seongdong-gu,Seoul,KR",
+    "성동구": "Seongdong-gu,Seoul,KR",
+    "성북": "Seongbuk-gu,Seoul,KR",
+    "성북구": "Seongbuk-gu,Seoul,KR",
+    "송파": "Songpa-gu,Seoul,KR",
+    "송파구": "Songpa-gu,Seoul,KR",
+    "양천": "Yangcheon-gu,Seoul,KR",
+    "양천구": "Yangcheon-gu,Seoul,KR",
+    "영등포": "Yeongdeungpo-gu,Seoul,KR",
+    "영등포구": "Yeongdeungpo-gu,Seoul,KR",
+    "용산": "Yongsan-gu,Seoul,KR",
+    "용산구": "Yongsan-gu,Seoul,KR",
+    "은평": "Eunpyeong-gu,Seoul,KR",
+    "은평구": "Eunpyeong-gu,Seoul,KR",
+    "종로": "Jongno-gu,Seoul,KR",
+    "종로구": "Jongno-gu,Seoul,KR",
+    "중구": "Jung-gu,Seoul,KR",
+    "중랑": "Jungnang-gu,Seoul,KR",
+    "중랑구": "Jungnang-gu,Seoul,KR",
+    
+    # 부산광역시
+    "부산": "Busan",
+    "부산광역시": "Busan",
+    "해운대": "Haeundae-gu,Busan,KR",
+    "해운대구": "Haeundae-gu,Busan,KR",
+    "부산진": "Busanjin-gu,Busan,KR",
+    "부산진구": "Busanjin-gu,Busan,KR",
+    "동래": "Dongnae-gu,Busan,KR",
+    "동래구": "Dongnae-gu,Busan,KR",
+    "남구": "Nam-gu,Busan,KR",
+    "북구": "Buk-gu,Busan,KR",
+    "수영": "Suyeong-gu,Busan,KR",
+    "수영구": "Suyeong-gu,Busan,KR",
+    "사상": "Sasang-gu,Busan,KR",
+    "사상구": "Sasang-gu,Busan,KR",
+    "연제": "Yeonje-gu,Busan,KR",
+    "연제구": "Yeonje-gu,Busan,KR",
+    "서구": "Seo-gu,Busan,KR",
+    "금정": "Geumjeong-gu,Busan,KR",
+    "금정구": "Geumjeong-gu,Busan,KR",
+    "기장": "Gijang-gun,Busan,KR",
+    "기장군": "Gijang-gun,Busan,KR",
+    
+    # 대구광역시
+    "대구": "Daegu",
+    "대구광역시": "Daegu",
+    "수성": "Suseong-gu,Daegu,KR",
+    "수성구": "Suseong-gu,Daegu,KR",
+    "달서": "Dalseo-gu,Daegu,KR",
+    "달서구": "Dalseo-gu,Daegu,KR",
+    
+    # 인천광역시
+    "인천": "Incheon",
+    "인천광역시": "Incheon",
+    "남동": "Namdong-gu,Incheon,KR",
+    "남동구": "Namdong-gu,Incheon,KR",
+    "부평": "Bupyeong-gu,Incheon,KR",
+    "부평구": "Bupyeong-gu,Incheon,KR",
+    "연수": "Yeonsu-gu,Incheon,KR",
+    "연수구": "Yeonsu-gu,Incheon,KR",
+    "중구": "Jung-gu,Incheon,KR",
+    "계양": "Gyeyang-gu,Incheon,KR",
+    "계양구": "Gyeyang-gu,Incheon,KR",
+    "서구": "Seo-gu,Incheon,KR",
+    "동구": "Dong-gu,Incheon,KR",
+    "미추홀": "Michuhol-gu,Incheon,KR",
+    "미추홀구": "Michuhol-gu,Incheon,KR",
+    "송도": "Songdo,Incheon,KR",
+    "강화": "Ganghwa-gun,Incheon,KR",
+    "강화군": "Ganghwa-gun,Incheon,KR",
+    
+    # 광주광역시
+    "광주": "Gwangju",
+    "광주광역시": "Gwangju",
+    "광산": "Gwangsan-gu,Gwangju,KR",
+    "광산구": "Gwangsan-gu,Gwangju,KR",
+    
+    # 대전광역시
+    "대전": "Daejeon",
+    "대전광역시": "Daejeon",
+    "유성": "Yuseong-gu,Daejeon,KR",
+    "유성구": "Yuseong-gu,Daejeon,KR",
+    "서구": "Seo-gu,Daejeon,KR",
+    "중구": "Jung-gu,Daejeon,KR",
+    "동구": "Dong-gu,Daejeon,KR",
+    "대덕": "Daedeok-gu,Daejeon,KR",
+    "대덕구": "Daedeok-gu,Daejeon,KR",
+    
+    # 울산광역시
+    "울산": "Ulsan",
+    "울산광역시": "Ulsan",
+    "남구": "Nam-gu,Ulsan,KR",
+    "동구": "Dong-gu,Ulsan,KR",
+    "북구": "Buk-gu,Ulsan,KR",
+    "중구": "Jung-gu,Ulsan,KR",
+    "울주": "Ulju-gun,Ulsan,KR",
+    "울주군": "Ulju-gun,Ulsan,KR",
+    
+    # 세종특별자치시
+    "세종": "Sejong",
+    "세종시": "Sejong",
+    "세종특별자치시": "Sejong",
+    
+    # 경기도
+    "수원": "Suwon",
+    "장안구": "Jangan-gu,Suwon,KR",
+    "권선구": "Gwonseon-gu,Suwon,KR",
+    "팔달구": "Paldal-gu,Suwon,KR",
+    "영통구": "Yeongtong-gu,Suwon,KR",
+    "성남": "Seongnam",
+    "분당": "Bundang-gu,Seongnam,KR",
+    "분당구": "Bundang-gu,Seongnam,KR",
+    "수정구": "Sujeong-gu,Seongnam,KR",
+    "중원구": "Jungwon-gu,Seongnam,KR",
+    "고양": "Goyang",
+    "일산": "Ilsandong-gu,Goyang,KR",
+    "일산동구": "Ilsandong-gu,Goyang,KR",
+    "일산서구": "Ilsanseo-gu,Goyang,KR",
+    "덕양구": "Deogyang-gu,Goyang,KR",
+    "용인": "Yongin",
+    "기흥구": "Giheung-gu,Yongin,KR",
+    "수지구": "Suji-gu,Yongin,KR",
+    "처인구": "Cheoin-gu,Yongin,KR",
+    "부천": "Bucheon",
+    "안산": "Ansan",
+    "단원구": "Danwon-gu,Ansan,KR",
+    "상록구": "Sangnok-gu,Ansan,KR",
+    "안양": "Anyang",
+    "만안구": "Manan-gu,Anyang,KR",
+    "동안구": "Dongan-gu,Anyang,KR",
+    "남양주": "Namyangju",
+    "화성": "Hwaseong",
+    "평택": "Pyeongtaek",
+    "의정부": "Uijeongbu",
+    "시흥": "Siheung",
+    "파주": "Paju",
+    "김포": "Gimpo",
+    "광명": "Gwangmyeong",
+    "광주시": "Gwangju-si,Gyeonggi,KR",
+    "군포": "Gunpo",
+    "하남": "Hanam",
+    "오산": "Osan",
+    "양주": "Yangju",
+    "이천": "Icheon",
+    "구리": "Guri",
+    "안성": "Anseong",
+    "포천": "Pocheon",
+    "의왕": "Uiwang",
+    "양평": "Yangpyeong",
+    "여주": "Yeoju",
+    "동두천": "Dongducheon",
+    "과천": "Gwacheon",
+    "가평": "Gapyeong",
+    "연천": "Yeoncheon",
+    
+    # 강원도
+    "춘천": "Chuncheon",
+    "원주": "Wonju",
+    "강릉": "Gangneung",
+    "동해": "Donghae",
+    "태백": "Taebaek",
+    "속초": "Sokcho",
+    "삼척": "Samcheok",
+    "홍천": "Hongcheon",
+    "횡성": "Hoengseong",
+    "영월": "Yeongwol",
+    "평창": "Pyeongchang",
+    "정선": "Jeongseon",
+    "철원": "Cheorwon",
+    "화천": "Hwacheon",
+    "양구": "Yanggu",
+    "인제": "Inje",
+    "고성": "Goseong",
+    "양양": "Yangyang",
+    "강원도": "Gangwon-do",
+    
+    # 충청북도
+    "청주": "Cheongju",
+    "상당구": "Sangdang-gu,Cheongju,KR",
+    "서원구": "Seowon-gu,Cheongju,KR",
+    "흥덕구": "Heungdeok-gu,Cheongju,KR",
+    "청원구": "Cheongwon-gu,Cheongju,KR",
+    "충주": "Chungju",
+    "제천": "Jecheon",
+    "보은": "Boeun",
+    "옥천": "Okcheon",
+    "영동": "Yeongdong",
+    "증평": "Jeungpyeong",
+    "진천": "Jincheon",
+    "괴산": "Goesan",
+    "음성": "Eumseong",
+    "단양": "Danyang",
+    "충청북도": "Chungcheongbuk-do",
+    
+    # 충청남도
+    "천안": "Cheonan",
+    "동남구": "Dongnam-gu,Cheonan,KR",
+    "서북구": "Seobuk-gu,Cheonan,KR",
+    "공주": "Gongju",
+    "보령": "Boryeong",
+    "아산": "Asan",
+    "서산": "Seosan",
+    "논산": "Nonsan",
+    "계룡": "Gyeryong",
+    "당진": "Dangjin",
+    "금산": "Geumsan",
+    "부여": "Buyeo",
+    "서천": "Seocheon",
+    "청양": "Cheongyang",
+    "홍성": "Hongseong",
+    "예산": "Yesan",
+    "태안": "Taean",
+    "충청남도": "Chungcheongnam-do",
+    
+    # 전라북도
+    "전주": "Jeonju",
+    "완산구": "Wansan-gu,Jeonju,KR",
+    "덕진구": "Deokjin-gu,Jeonju,KR",
+    "군산": "Gunsan",
+    "익산": "Iksan",
+    "정읍": "Jeongeup",
+    "남원": "Namwon",
+    "김제": "Gimje",
+    "완주": "Wanju",
+    "진안": "Jinan",
+    "무주": "Muju",
+    "장수": "Jangsu",
+    "임실": "Imsil",
+    "순창": "Sunchang",
+    "고창": "Gochang",
+    "부안": "Buan",
+    "전라북도": "Jeollabuk-do",
+    
+    # 전라남도
+    "목포": "Mokpo",
+    "여수": "Yeosu",
+    "순천": "Suncheon",
+    "나주": "Naju",
+    "광양": "Gwangyang",
+    "담양": "Damyang",
+    "곡성": "Gokseong",
+    "구례": "Gurye",
+    "고흥": "Goheung",
+    "보성": "Boseong",
+    "화순": "Hwasun",
+    "장흥": "Jangheung",
+    "강진": "Gangjin",
+    "해남": "Haenam",
+    "영암": "Yeongam",
+    "무안": "Muan",
+    "함평": "Hampyeong",
+    "영광": "Yeonggwang",
+    "장성": "Jangseong",
+    "완도": "Wando",
+    "진도": "Jindo",
+    "신안": "Sinan",
+    "전라남도": "Jeollanam-do",
+    
+    # 경상북도
+    "포항": "Pohang",
+    "남구": "Nam-gu,Pohang,KR",
+    "북구": "Buk-gu,Pohang,KR",
+    "경주": "Gyeongju",
+    "김천": "Gimcheon",
+    "안동": "Andong",
+    "구미": "Gumi",
+    "영주": "Yeongju",
+    "영천": "Yeongcheon",
+    "상주": "Sangju",
+    "문경": "Mungyeong",
+    "경산": "Gyeongsan",
+    "군위": "Gunwi",
+    "의성": "Uiseong",
+    "청송": "Cheongsong",
+    "영양": "Yeongyang",
+    "영덕": "Yeongdeok",
+    "청도": "Cheongdo",
+    "고령": "Goryeong",
+    "성주": "Seongju",
+    "칠곡": "Chilgok",
+    "예천": "Yecheon",
+    "봉화": "Bonghwa",
+    "울진": "Uljin",
+    "울릉": "Ulleung",
+    "울릉도": "Ulleungdo",
+    "경상북도": "Gyeongsangbuk-do",
+    
+    # 경상남도
+    "창원": "Changwon",
+    "의창구": "Uichang-gu,Changwon,KR",
+    "성산구": "Seongsan-gu,Changwon,KR",
+    "마산": "Masan,Changwon,KR",
+    "마산합포구": "Masanhappo-gu,Changwon,KR",
+    "마산회원구": "Masanhoewon-gu,Changwon,KR",
+    "진해": "Jinhae-gu,Changwon,KR",
+    "진해구": "Jinhae-gu,Changwon,KR",
+    "진주": "Jinju",
+    "통영": "Tongyeong",
+    "사천": "Sacheon",
+    "김해": "Gimhae",
+    "밀양": "Miryang",
+    "거제": "Geoje",
+    "양산": "Yangsan",
+    "의령": "Uiryeong",
+    "함안": "Haman",
+    "창녕": "Changnyeong",
+    "고성군": "Goseong-gun,Gyeongnam,KR",
+    "남해": "Namhae",
+    "하동": "Hadong",
+    "산청": "Sancheong",
+    "함양": "Hamyang",
+    "거창": "Geochang",
+    "합천": "Hapcheon",
+    "경상남도": "Gyeongsangnam-do",
+    
+    # 제주특별자치도
+    "제주": "Jeju",
+    "제주시": "Jeju City",
+    "서귀포": "Seogwipo",
+    "제주도": "Jeju",
+}
+
+def get_weather(city):
+    """도시 이름으로 날씨 정보를 가져옵니다."""
+    # 한글 도시명을 영문으로 변환
+    if city in KOREAN_CITIES:
+        english_city = KOREAN_CITIES[city]
+    else:
+        english_city = city
+    
+    params = {
+        'q': english_city,
+        'appid': API_KEY,
+        'units': 'metric',  # 섭씨 온도 사용
+        'lang': 'kr'  # 한국어 설명
+    }
+    
+    try:
+        response = requests.get(BASE_URL, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return None
+
+def display_weather(weather_data, show_current_location: bool = False):
+    """날씨 정보를 화면에 표시합니다.
+
+    show_current_location: 지도에 브라우저의 현재 위치도 함께 표시할지 여부
+    """
+    if weather_data:
+        # 기본 정보
+        city_name = weather_data['name']
+        country = weather_data['sys']['country']
+        lat = weather_data.get('coord', {}).get('lat')
+        lon = weather_data.get('coord', {}).get('lon')
+        
+        # 날씨 정보
+        temp = weather_data['main']['temp']
+        feels_like = weather_data['main']['feels_like']
+        temp_min = weather_data['main']['temp_min']
+        temp_max = weather_data['main']['temp_max']
+        humidity = weather_data['main']['humidity']
+        pressure = weather_data['main']['pressure']
+        
+        # 날씨 상태
+        weather_main = weather_data['weather'][0]['main']
+        weather_desc = weather_data['weather'][0]['description']
+        weather_icon = weather_data['weather'][0]['icon']
+        
+        # 바람
+        wind_speed = weather_data['wind']['speed']
+        
+        # 시간 정보
+        timezone = weather_data['timezone']
+        sunrise = datetime.fromtimestamp(weather_data['sys']['sunrise'] + timezone)
+        sunset = datetime.fromtimestamp(weather_data['sys']['sunset'] + timezone)
+        
+        # 현재 날짜와 시간
+        current_time = datetime.now()
+        
+        # 화면 표시 - 헤더
+        st.markdown(f"""
+        <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 20px;'>
+            <h1 style='color: white; margin: 0;'>🌤️ {city_name}, {country}</h1>
+            <p style='color: #f0f0f0; font-size: 16px; margin: 10px 0 0 0;'>
+                📅 {current_time.strftime('%Y년 %m월 %d일 %A')} | 🕐 {current_time.strftime('%H:%M:%S')}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 날씨 아이콘과 주요 정보
+        icon_url = f"http://openweathermap.org/img/wn/{weather_icon}@4x.png"
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        
+        with col1:
+            st.image(icon_url, width=150)
+        
+        with col2:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px;'>
+                <h1 style='font-size: 72px; margin: 0; color: #667eea;'>{temp:.1f}°C</h1>
+                <p style='font-size: 24px; color: #666; margin: 10px 0;'>{weather_desc.capitalize()}</p>
+                <p style='font-size: 18px; color: #888;'>체감온도: {feels_like:.1f}°C</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.metric("최고", f"{temp_max:.1f}°C", None)
+            st.metric("최저", f"{temp_min:.1f}°C", None)
+        
+        st.markdown("---")
+        
+        # 상세 정보
+        st.subheader("📊 상세 날씨 정보")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
+                <h3 style='color: #667eea; margin: 0;'>💧 습도</h3>
+                <p style='font-size: 32px; margin: 10px 0; font-weight: bold;'>{humidity}%</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
+                <h3 style='color: #667eea; margin: 0;'>🌡️ 기압</h3>
+                <p style='font-size: 32px; margin: 10px 0; font-weight: bold;'>{pressure}</p>
+                <p style='font-size: 14px; color: #888; margin: 0;'>hPa</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
+                <h3 style='color: #667eea; margin: 0;'>💨 풍속</h3>
+                <p style='font-size: 32px; margin: 10px 0; font-weight: bold;'>{wind_speed}</p>
+                <p style='font-size: 14px; color: #888; margin: 0;'>m/s</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            # 체감 지수 계산 (간단한 예시)
+            if temp < 0:
+                condition = "매우 추움"
+                emoji = "🥶"
+            elif temp < 10:
+                condition = "추움"
+                emoji = "😰"
+            elif temp < 20:
+                condition = "쾌적"
+                emoji = "😊"
+            elif temp < 28:
+                condition = "따뜻함"
+                emoji = "🙂"
+            else:
+                condition = "더움"
+                emoji = "🥵"
+                
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 10px;'>
+                <h3 style='color: #667eea; margin: 0;'>🌡️ 체감</h3>
+                <p style='font-size: 32px; margin: 10px 0;'>{emoji}</p>
+                <p style='font-size: 14px; color: #888; margin: 0;'>{condition}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # 일출/일몰 정보
+        st.subheader("🌅 일출 · 일몰 정보")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 30px; background: linear-gradient(135deg, #FFA17F 0%, #FF6B6B 100%); border-radius: 10px;'>
+                <h2 style='color: white; margin: 0;'>🌅 일출</h2>
+                <p style='font-size: 48px; color: white; margin: 10px 0; font-weight: bold;'>{sunrise.strftime('%H:%M')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;'>
+                <h2 style='color: white; margin: 0;'>🌇 일몰</h2>
+                <p style='font-size: 48px; color: white; margin: 10px 0; font-weight: bold;'>{sunset.strftime('%H:%M')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 주간 날씨 예보 섹션
+        if lat is not None and lon is not None:
+            st.markdown("---")
+            st.subheader("📅 주간 날씨 예보")
+            
+            with st.spinner('📊 예보 데이터를 가져오는 중...'):
+                forecast_data = get_forecast_data(lat, lon)
+                
+                if forecast_data and forecast_data.get('list'):
+                    # 일별로 데이터 그룹화 (하루에 하나씩만 표시)
+                    daily_forecasts = {}
+                    for item in forecast_data['list']:
+                        dt = datetime.fromtimestamp(item['dt'])
+                        date_key = dt.strftime('%Y-%m-%d')
+                        
+                        # 각 날짜의 정오(12시) 데이터 우선 선택, 없으면 첫 데이터
+                        if date_key not in daily_forecasts:
+                            daily_forecasts[date_key] = item
+                        elif dt.hour == 12:  # 정오 데이터 우선
+                            daily_forecasts[date_key] = item
+                    
+                    # 최대 7일치 표시
+                    forecast_items = list(daily_forecasts.items())[:7]
+                    
+                    # 7개의 컬럼으로 표시
+                    cols = st.columns(min(7, len(forecast_items)))
+                    
+                    for idx, (date_key, item) in enumerate(forecast_items):
+                        if idx < len(cols):
+                            with cols[idx]:
+                                dt = datetime.fromtimestamp(item['dt'])
+                                temp = item['main']['temp']
+                                temp_min = item['main']['temp_min']
+                                temp_max = item['main']['temp_max']
+                                weather_desc = item['weather'][0]['description']
+                                weather_icon = item['weather'][0]['icon']
+                                
+                                # 요일 표시
+                                weekday = dt.strftime('%a')
+                                weekday_kr = {'Mon': '월', 'Tue': '화', 'Wed': '수', 
+                                            'Thu': '목', 'Fri': '금', 'Sat': '토', 'Sun': '일'}
+                                weekday_display = weekday_kr.get(weekday, weekday)
+                                
+                                # 날짜 표시
+                                date_display = dt.strftime('%m/%d')
+                                
+                                # 아이콘 URL
+                                icon_url = f"http://openweathermap.org/img/wn/{weather_icon}@2x.png"
+                                
+                                # 카드 형태로 표시
+                                st.markdown(f"""
+                                <div style='text-align: center; padding: 12px; background: linear-gradient(135deg, #e0e7ff 0%, #f3f4f6 100%); border-radius: 10px; margin-bottom: 8px;'>
+                                    <p style='font-weight: bold; margin: 0; color: #667eea; font-size: 14px;'>{weekday_display}요일</p>
+                                    <p style='margin: 4px 0; color: #888; font-size: 12px;'>{date_display}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                st.image(icon_url, width=60)
+                                
+                                st.markdown(f"""
+                                <div style='text-align: center;'>
+                                    <p style='font-size: 20px; font-weight: bold; margin: 4px 0; color: #667eea;'>{temp:.0f}°</p>
+                                    <p style='font-size: 11px; color: #888; margin: 2px 0;'>최고 {temp_max:.0f}°</p>
+                                    <p style='font-size: 11px; color: #888; margin: 2px 0;'>최저 {temp_min:.0f}°</p>
+                                    <p style='font-size: 11px; color: #666; margin: 4px 0;'>{weather_desc}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                    
+                    st.caption("💡 OpenWeather API 무료 버전은 5일간의 3시간 간격 예보를 제공합니다.")
+                else:
+                    st.info("📊 예보 데이터를 가져올 수 없습니다.")
+            
+            # 시간대별 상세 예보 (선택적으로 표시)
+            with st.expander("🕐 시간대별 상세 예보 보기"):
+                if forecast_data and forecast_data.get('list'):
+                    st.markdown("### 📈 향후 24시간 날씨")
+                    
+                    # 향후 24시간 (8개 데이터 포인트 = 3시간 * 8)
+                    hourly_data = forecast_data['list'][:8]
+                    
+                    for item in hourly_data:
+                        dt = datetime.fromtimestamp(item['dt'])
+                        temp = item['main']['temp']
+                        feels_like = item['main']['feels_like']
+                        humidity = item['main']['humidity']
+                        weather_desc = item['weather'][0]['description']
+                        weather_icon = item['weather'][0]['icon']
+                        pop = item.get('pop', 0) * 100  # 강수 확률
+                        
+                        icon_url = f"http://openweathermap.org/img/wn/{weather_icon}.png"
+                        
+                        col1, col2, col3, col4, col5 = st.columns([2, 1, 2, 2, 2])
+                        
+                        with col1:
+                            st.markdown(f"**{dt.strftime('%m/%d %H:%M')}**")
+                        with col2:
+                            st.image(icon_url, width=40)
+                        with col3:
+                            st.markdown(f"🌡️ {temp:.1f}°C (체감 {feels_like:.1f}°C)")
+                        with col4:
+                            st.markdown(f"💧 습도 {humidity}%")
+                        with col5:
+                            st.markdown(f"☔ 강수확률 {pop:.0f}%")
+                        
+                        st.caption(f"📝 {weather_desc}")
+                        st.markdown("---")
+
+        # 지도 섹션
+        if lat is not None and lon is not None:
+            st.markdown("---")
+            st.subheader("🗺️ 위치 지도")
+            st.caption(f"📍 좌표: 위도 {lat:.4f}, 경도 {lon:.4f}")
+            
+            try:
+                render_kakao_map(lat, lon, city_name, show_current_location)
+                
+                # 지도 도움말
+                with st.expander("💡 지도가 보이지 않나요?"):
+                    st.markdown("""
+                    **Kakao Maps 표시 문제 해결:**
+                    
+                    1. **도메인 허용 설정** (필수)
+                       - [Kakao Developers 콘솔](https://developers.kakao.com) 로그인
+                       - 내 애플리케이션 > 앱 설정 > 플랫폼
+                       - 웹 플랫폼 추가 후 `http://localhost:8501` 또는 `http://localhost:8502` 등록
+                    
+                    2. **네트워크 확인**
+                       - 방화벽이나 AdBlock이 `dapi.kakao.com` 차단하는지 확인
+                       - 회사망/VPN 사용 시 외부 스크립트 로딩 제한 확인
+                    
+                    3. **브라우저 콘솔 확인**
+                       - F12 개발자 도구 > Console 탭에서 에러 메시지 확인
+                       - Kakao SDK 로딩 실패 메시지가 있는지 확인
+                    
+                    4. **현재 위치 표시 기능**
+                       - HTTPS 또는 localhost에서만 브라우저 위치 정보 사용 가능
+                       - 브라우저 설정에서 위치 정보 권한 허용 필요
+                    """)
+            except Exception as e:
+                st.error(f"❌ 지도를 표시하는 중 오류가 발생했습니다: {str(e)}")
+                st.info("💡 페이지를 새로고침하거나 나중에 다시 시도해주세요.")
+
+def main():
+    st.set_page_config(
+        page_title="날씨 앱",
+        page_icon="🌤️",
+        layout="wide"
+    )
+    
+    # 사이드바
+    st.sidebar.title("🌍 날씨 검색")
+    st.sidebar.write("전세계 도시의 실시간 날씨를 확인하세요!")
+    
+    # 현재 위치 날씨 버튼
+    st.sidebar.markdown("### 📍 현재 위치")
+    current_location_button = st.sidebar.button("📍 현재 위치 날씨 보기", type="secondary", use_container_width=True)
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔍 도시 검색")
+    
+    # 도시 입력
+    city = st.sidebar.text_input(
+        "도시 이름을 입력하세요 (한글/영문)",
+        placeholder="예: 강남구, 해운대구, 분당구, 일산, Seoul"
+    )
+    
+    # 검색 버튼
+    search_button = st.sidebar.button("🔍 검색", type="primary")
+    
+    # 지도 옵션
+    show_current_location = st.sidebar.checkbox("지도에 현재 위치도 표시", value=False)
+    
+    # 현재 위치 버튼을 누른 경우
+    if current_location_button:
+        with st.spinner('📡 현재 위치를 확인하는 중... (IP 주소 기반)'):
+            location_info = get_location_by_ip()
+            
+            if location_info:
+                # 위치 정보 표시
+                st.success(f"✅ 위치 감지 성공!")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.info(f"📍 **감지된 위치**\n\n{location_info['city']}, {location_info['country']}")
+                with col2:
+                    st.info(f"🌐 **네트워크 정보**\n\nIP: {location_info['ip']}\n출처: {location_info.get('source', 'N/A')}")
+                
+                st.caption(f"📌 좌표: 위도 {location_info['lat']:.4f}, 경도 {location_info['lon']:.4f}")
+                
+                with st.spinner('🌤️ 날씨 정보를 가져오는 중...'):
+                    weather_data = get_weather_by_coords(location_info['lat'], location_info['lon'])
+                    
+                    if weather_data and str(weather_data.get('cod')) != '404':
+                        st.success(f"✅ {location_info['city']}의 날씨 정보를 불러왔습니다!")
+                        display_weather(weather_data, show_current_location=False)
+                    else:
+                        st.error("❌ 현재 위치의 날씨 정보를 가져올 수 없습니다.")
+                        st.warning("💡 OpenWeather API에서 해당 좌표의 날씨 데이터를 찾을 수 없습니다.")
+            else:
+                st.error("❌ 현재 위치를 확인할 수 없습니다.")
+                st.warning("**가능한 원인:**")
+                st.markdown("""
+                - 네트워크 연결 불안정
+                - IP 위치 서비스 일시적 장애
+                - VPN 또는 프록시 사용 중
+                - 방화벽이 외부 API 요청을 차단
+                """)
+                st.info("💡 **대안:** 아래에서 도시 이름을 직접 입력하여 검색해보세요.")
+        return
+    
+    # 메인 화면
+    if not city and not search_button:
+        st.title("🌤️ 날씨 웹앱에 오신 것을 환영합니다!")
+        st.write("왼쪽 사이드바에서 도시를 입력하거나 현재 위치를 사용하여 날씨를 확인하세요.")
+        
+        # 안내 메시지
+        st.info("💡 **사용 방법:**")
+        st.markdown("""
+        1. **📍 현재 위치:** 사이드바의 '현재 위치 날씨 보기' 버튼을 클릭하면 IP 주소를 기반으로 자동으로 위치를 감지합니다.
+        2. **🔍 도시 검색:** 한글 또는 영문으로 도시 이름을 입력하고 검색 버튼을 클릭하세요.
+        """)
+        st.success("✅ 한국 도시는 시/군/구 단위까지 한글로 입력 가능합니다")
+        
+        # 검색 가능한 지역 안내
+        with st.expander("🔍 검색 가능한 한국 지역 예시"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write("**서울 (구 단위)**")
+                st.write("강남구, 송파구, 강서구")
+                st.write("마포구, 영등포구, 서초구")
+                st.write("**부산 (구 단위)**")
+                st.write("해운대구, 부산진구")
+            with col2:
+                st.write("**경기도**")
+                st.write("수원, 성남, 분당구")
+                st.write("일산, 용인, 부천")
+                st.write("**강원도**")
+                st.write("춘천, 강릉, 속초")
+            with col3:
+                st.write("**기타 지역**")
+                st.write("대전, 대구, 인천")
+                st.write("전주, 제주, 포항")
+                st.write("청주, 천안, 창원")
+        
+        st.success("✅ 전세계 모든 도시 검색 가능합니다 (예: Tokyo, London, Paris, New York)")
+        
+    elif city:
+        # 입력된 도시명 표시 (한글인 경우)
+        display_city = city
+        if city in KOREAN_CITIES:
+            display_city = f"{city} ({KOREAN_CITIES[city]})"
+            
+        with st.spinner(f'{display_city}의 날씨 정보를 가져오는 중...'):
+            weather_data = get_weather(city)
+            
+            if weather_data and weather_data.get('cod') != '404':
+                display_weather(weather_data, show_current_location=show_current_location)
+            else:
+                st.error(f"❌ '{city}' 도시를 찾을 수 없습니다. 정확한 도시 이름을 입력해주세요.")
+                st.info("💡 한국 지역 예시: 서울, 강남구, 송파구, 부산, 해운대구, 분당구, 일산, 제주 등")
+                st.info("💡 해외 도시 예시: Seoul, Tokyo, London, Paris, New York 등")
+    
+    # 푸터
+    st.sidebar.markdown("---")
+    st.sidebar.caption("Powered by OpenWeather API")
+    st.sidebar.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+if __name__ == "__main__":
+    main()
+
